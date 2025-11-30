@@ -1,8 +1,10 @@
 import os
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 from discord import app_commands
+import aiohttp
 import json
+from typing import List, Dict, Optional
 
 # -----------------------------
 # CONFIG
@@ -12,6 +14,7 @@ if not TOKEN:
     raise ValueError("❌ TOKEN nicht gesetzt!")
 
 DATA_FILE = "bot_data.json"
+POLL_INTERVAL = 30  # Sekunden
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -25,7 +28,9 @@ bot = commands.Bot(command_prefix="$", intents=intents)
 # -----------------------------
 default_data = {
     "panic_channel": None,
-    "panic_role": None
+    "panic_role": None,
+    "tracked": [],      # Für Roblox User
+    "log_channel": None # Für Roblox Embeds
 }
 
 if os.path.exists(DATA_FILE):
@@ -42,6 +47,8 @@ def save_data():
 
 # ================== COLORS ==================
 RED = discord.Color.red()
+COLOR_GREEN = discord.Color.from_rgb(64, 255, 64)
+COLOR_RED = discord.Color.from_rgb(255, 64, 64)
 
 # -----------------------------
 # PANIC MODAL
@@ -133,12 +140,202 @@ async def set_panic_role(interaction: discord.Interaction, role: discord.Role):
     await interaction.response.send_message(f"Panic Rolle gesetzt auf {role.mention}", ephemeral=True)
 
 # -----------------------------
+# ROBLOX TRACKING
+# -----------------------------
+last_status: Dict[int, str] = {}  # userId -> "ONLINE"/"OFFLINE"
+
+async def roblox_get_user_by_username(session: aiohttp.ClientSession, username: str) -> Optional[Dict]:
+    url = "https://users.roblox.com/v1/usernames/users"
+    payload = {"usernames": [username], "excludeBannedUsers": False}
+    try:
+        async with session.post(url, json=payload, timeout=10) as resp:
+            if resp.status != 200:
+                return None
+            js = await resp.json()
+            if "data" in js and len(js["data"]) > 0:
+                u = js["data"][0]
+                return {"id": u["id"], "name": u["name"], "displayName": u.get("displayName", u["name"])}
+    except:
+        return None
+    return None
+
+async def roblox_get_presences(session: aiohttp.ClientSession, user_ids: List[int]) -> Dict:
+    url = "https://presence.roblox.com/v1/presence/users"
+    payload = {"userIds": user_ids}
+    try:
+        async with session.post(url, json=payload, timeout=10) as resp:
+            if resp.status != 200:
+                return {}
+            return await resp.json()
+    except:
+        return {}
+
+async def roblox_get_avatar_url(session: aiohttp.ClientSession, user_id: int, size: int = 150) -> Optional[str]:
+    url = "https://thumbnails.roblox.com/v1/users/avatar-headshot"
+    params = {"userIds": str(user_id), "size": str(size), "format": "Png", "isCircular": "false"}
+    try:
+        async with session.get(url, params=params, timeout=10) as resp:
+            if resp.status != 200:
+                return None
+            js = await resp.json()
+            if "data" in js and len(js["data"]) > 0:
+                return js["data"][0].get("imageUrl")
+    except:
+        return None
+    return None
+
+async def roblox_resolve_game_name(session: aiohttp.ClientSession, place_id: Optional[int], last_location: Optional[str]) -> str:
+    if place_id:
+        url = "https://games.roblox.com/v1/games/multiget-place-details"
+        params = {"placeIds": str(place_id)}
+        try:
+            async with session.get(url, params=params, timeout=10) as resp:
+                if resp.status == 200:
+                    js = await resp.json()
+                    if isinstance(js, list) and len(js) > 0:
+                        return js[0].get("name", str(place_id))
+        except:
+            pass
+    if last_location:
+        return str(last_location)
+    return "Unbekannt"
+
+def build_online_embed(display_name: str, username: str, game_name: str, avatar_url: Optional[str]) -> discord.Embed:
+    title = "🟢**Online!**🟢"
+    description = f"**{display_name} ({username})** is online!\n\nHe/She play: **{game_name}**"
+    e = discord.Embed(title=title, description=description, color=COLOR_GREEN)
+    if avatar_url:
+        e.set_thumbnail(url=avatar_url)
+    return e
+
+def build_offline_embed(display_name: str, username: str, avatar_url: Optional[str]) -> discord.Embed:
+    title = "🔴**Offline!**🔴"
+    description = f"**{display_name} ({username})** is offline!\n\nHe/She is now offline!"
+    e = discord.Embed(title=title, description=description, color=COLOR_RED)
+    if avatar_url:
+        e.set_thumbnail(url=avatar_url)
+    return e
+
+# -----------------------------
+# ROBLOX SLASH COMMANDS
+# -----------------------------
+def admin_check(interaction: discord.Interaction):
+    return interaction.user.guild_permissions.administrator
+
+@bot.tree.command(name="choose-bounty-log", description="Set the channel where status embeds will be posted")
+@app_commands.describe(channel="Wähle den Channel für die Embeds")
+async def choose_bounty_log(interaction: discord.Interaction, channel: discord.TextChannel):
+    if not admin_check(interaction):
+        await interaction.response.send_message("Nur Admins dürfen diesen Befehl nutzen.", ephemeral=True)
+        return
+    data["log_channel"] = channel.id
+    save_data()
+    await interaction.response.send_message(f"Log channel gesetzt auf {channel.mention}", ephemeral=True)
+
+@bot.tree.command(name="add-user", description="Add a Roblox username to the tracked list")
+@app_commands.describe(username="Roblox username (z. B. Builderman)")
+async def add_user(interaction: discord.Interaction, username: str):
+    if not admin_check(interaction):
+        await interaction.response.send_message("Nur Admins dürfen diesen Befehl nutzen.", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)
+    async with aiohttp.ClientSession() as session:
+        user = await roblox_get_user_by_username(session, username)
+        if not user:
+            await interaction.followup.send(f"Roblox-User `{username}` nicht gefunden.", ephemeral=True)
+            return
+        for t in data["tracked"]:
+            if t["userId"] == user["id"]:
+                await interaction.followup.send(f"`{user['name']}` ist bereits in der Liste.", ephemeral=True)
+                return
+        data["tracked"].append({
+            "username": user["name"],
+            "userId": user["id"],
+            "displayName": user.get("displayName", user["name"])
+        })
+        save_data()
+        await interaction.followup.send(f"`{user['name']}` wurde hinzugefügt.", ephemeral=True)
+
+@bot.tree.command(name="remove-user", description="Remove a Roblox username from the tracked list")
+@app_commands.describe(username="Roblox username to remove")
+async def remove_user(interaction: discord.Interaction, username: str):
+    if not admin_check(interaction):
+        await interaction.response.send_message("Nur Admins dürfen diesen Befehl nutzen.", ephemeral=True)
+        return
+    removed = None
+    for t in list(data["tracked"]):
+        if t["username"].lower() == username.lower():
+            removed = t
+            data["tracked"].remove(t)
+            save_data()
+            break
+    if removed:
+        await interaction.response.send_message(f"`{removed['username']}` entfernt.", ephemeral=True)
+    else:
+        await interaction.response.send_message(f"`{username}` nicht in der Liste gefunden.", ephemeral=True)
+
+@bot.tree.command(name="show-bounty-list", description="Show the tracked Roblox players")
+async def show_bounty_list(interaction: discord.Interaction):
+    if not data.get("tracked"):
+        await interaction.response.send_message("Aktuell sind keine Spieler in der Liste.", ephemeral=False)
+        return
+    lines = []
+    for t in data["tracked"]:
+        lines.append(f"- **{t.get('displayName','-')}** (`{t.get('username')}`)")
+    await interaction.response.send_message(f"**Tracked Players:**\n" + "\n".join(lines), ephemeral=False)
+
+# -----------------------------
+# BACKGROUND TASK
+# -----------------------------
+@tasks.loop(seconds=POLL_INTERVAL)
+async def presence_poll():
+    if not bot.is_ready():
+        return
+    if not data.get("tracked") or not data.get("log_channel"):
+        return
+    log_channel = bot.get_channel(data["log_channel"])
+    if not log_channel:
+        return
+    user_ids = [t["userId"] for t in data["tracked"]]
+    BATCH = 100
+    async with aiohttp.ClientSession() as session:
+        for i in range(0, len(user_ids), BATCH):
+            batch_ids = user_ids[i:i+BATCH]
+            resp = await roblox_get_presences(session, batch_ids)
+            user_presences = resp.get("userPresences", [])
+            pres_by_id = {p.get("userId"): p for p in user_presences}
+            for tracked_item in data["tracked"]:
+                uid = tracked_item["userId"]
+                username = tracked_item.get("username")
+                display_name = tracked_item.get("displayName", username)
+                pres = pres_by_id.get(uid)
+                online_now = pres.get("userPresenceType") == 2 if pres else False
+                last_location = pres.get("lastLocation") if pres else None
+                place_id = pres.get("placeId") if pres else None
+                current = "ONLINE" if online_now else "OFFLINE"
+                previous = last_status.get(uid)
+                if current != previous:
+                    last_status[uid] = current
+                    avatar_url = await roblox_get_avatar_url(session, uid)
+                    game_name = await roblox_resolve_game_name(session, place_id, last_location)
+                    try:
+                        if current == "ONLINE":
+                            embed = build_online_embed(display_name, username, game_name, avatar_url)
+                        else:
+                            embed = build_offline_embed(display_name, username, avatar_url)
+                        await log_channel.send(embed=embed)
+                    except Exception as e:
+                        print(f"Fehler Embed senden für {username}: {e}")
+
+# -----------------------------
 # BOT READY
 # -----------------------------
 @bot.event
 async def on_ready():
     bot.add_view(PanicButtonView())
     await bot.tree.sync()
+    if not presence_poll.is_running():
+        presence_poll.start()
     print(f"Bot ist online als {bot.user}")
 
 bot.run(TOKEN)
