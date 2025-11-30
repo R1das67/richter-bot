@@ -1,422 +1,144 @@
+import os
 import discord
 from discord.ext import commands
 from discord import app_commands
-import asyncio
-import os
-from discord import AllowedMentions
+import json
 
-# ================= BOT SETUP =================
+# -----------------------------
+# CONFIG
+# -----------------------------
+TOKEN = os.getenv("DISCORD_TOKEN")
+if not TOKEN:
+    raise ValueError("❌ TOKEN nicht gesetzt!")
+
+DATA_FILE = "bot_data.json"
+
 intents = discord.Intents.default()
-intents.guilds = True
-intents.members = True
 intents.message_content = True
+intents.members = True
+intents.guilds = True
 
 bot = commands.Bot(command_prefix="$", intents=intents)
 
-# ================= STORAGE PANEL 1 =================
-ticket_category_id = None
-ticket_mod_role_id = None
-ticket_count = 0
+# -----------------------------
+# DATA HANDLING
+# -----------------------------
+default_data = {
+    "panic_channel": None,
+    "panic_role": None
+}
 
-# ================= STORAGE PANEL 2 =================
-ticket_category_id_2 = None
-ticket_mod_role_id_2 = None
-ticket_count_2 = 0
-embed_title_2 = "📨 Support Ticket"
-embed_text_2 = "Bitte erstelle ein Ticket, um deine Angelegenheiten mit dem Support zu besprechen."
+if os.path.exists(DATA_FILE):
+    with open(DATA_FILE, "r") as f:
+        data = json.load(f)
+else:
+    data = default_data
+    with open(DATA_FILE, "w") as f:
+        json.dump(data, f, indent=4)
 
-# ================= STORAGE PANEL 3 =================
-ticket_category_id_3 = None
-ticket_mod_role_id_3 = None
-ticket_count_3 = 0
-embed_title_3 = "📨 Support Ticket (Panel 3)"
-embed_text_3 = "Bitte erstelle ein Ticket, um deine Angelegenheiten mit dem Support zu besprechen."
+def save_data():
+    with open(DATA_FILE, "w") as f:
+        json.dump(data, f, indent=4)
 
-# ================= ADMIN CHECK =================
-def is_admin(interaction: discord.Interaction) -> bool:
-    """Prüft, ob der Benutzer Administratorrechte hat."""
+# ================== COLORS ==================
+RED = discord.Color.red()
+
+# -----------------------------
+# PANIC MODAL
+# -----------------------------
+class PanicModal(discord.ui.Modal, title="🚨 Panic Request"):
+    username = discord.ui.TextInput(label="Roblox Username", placeholder="Dein Roblox Username", required=True, max_length=50)
+    location = discord.ui.TextInput(label="Location", placeholder="Wo befindest du dich?", required=True, max_length=100)
+    additional_info = discord.ui.TextInput(label="Additional Information", placeholder="Zusätzliche Informationen", required=False, max_length=200)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        panic_channel_id = data.get("panic_channel")
+        panic_role_id = data.get("panic_role")
+
+        if panic_channel_id is None or panic_role_id is None:
+            await interaction.response.send_message(
+                "❌ Panic-Channel oder Panic-Rolle nicht gesetzt!",
+                ephemeral=True
+            )
+            return
+
+        channel = interaction.client.get_channel(panic_channel_id)
+        role_ping = f"<@&{panic_role_id}>"
+
+        embed = discord.Embed(
+            title=f"🚨 Panic Button pressed by {interaction.user}",
+            color=RED
+        )
+        embed.add_field(name="Roblox Username", value=self.username.value, inline=False)
+        embed.add_field(name="Location", value=self.location.value, inline=False)
+        embed.add_field(name="Additional Information", value=self.additional_info.value or "Keine", inline=False)
+
+        await channel.send(f"**__🚨{role_ping} panic!🚨__**", embed=embed)
+        await interaction.response.send_message("✅ Panic Alert gesendet!", ephemeral=True)
+
+# -----------------------------
+# PANIC BUTTON
+# -----------------------------
+class PanicButtonView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="🚨 Panic", style=discord.ButtonStyle.danger, custom_id="panic_button")
+    async def panic_button_callback(self, interaction: discord.Interaction, button: discord.ui.Button):
+        modal = PanicModal()
+        await interaction.response.send_modal(modal)
+
+# -----------------------------
+# ADMIN CHECK
+# -----------------------------
+def is_admin(interaction: discord.Interaction):
     return interaction.user.guild_permissions.administrator
 
-# ================= EMBED FARBE =================
-SUNFLOWER_YELLOW = discord.Color.from_rgb(255, 223, 0)  # Sunflower Yellow
+# -----------------------------
+# SLASH COMMANDS: PANIC
+# -----------------------------
+@bot.tree.command(name="create-panic-button", description="Erstellt den Panic Button")
+async def create_panic_button(interaction: discord.Interaction):
+    if not is_admin(interaction):
+        await interaction.response.send_message("❌ Nur Admins dürfen diesen Befehl nutzen.", ephemeral=True)
+        return
 
-# ================= COMMANDS =================
+    embed = discord.Embed(
+        title="🚨 Panic Button",
+        description="Wenn du Hilfe benötigst, drücke den Panic Button.",
+        color=RED
+    )
+    view = PanicButtonView()
+    await interaction.channel.send(embed=embed, view=view)
+    await interaction.response.send_message("✅ Panic Button erstellt!", ephemeral=True)
+
+@bot.tree.command(name="set-panic-channel", description="Setze den Panic Channel")
+async def set_panic_channel(interaction: discord.Interaction, channel: discord.TextChannel):
+    if not is_admin(interaction):
+        await interaction.response.send_message("❌ Nur Admins dürfen diesen Befehl nutzen.", ephemeral=True)
+        return
+
+    data["panic_channel"] = channel.id
+    save_data()
+    await interaction.response.send_message(f"Panic Channel gesetzt auf {channel.mention}", ephemeral=True)
+
+@bot.tree.command(name="set-panic-role", description="Setze die Rolle die beim Panic gepingt wird")
+async def set_panic_role(interaction: discord.Interaction, role: discord.Role):
+    if not is_admin(interaction):
+        await interaction.response.send_message("❌ Nur Admins dürfen diesen Befehl nutzen.", ephemeral=True)
+        return
+
+    data["panic_role"] = role.id
+    save_data()
+    await interaction.response.send_message(f"Panic Rolle gesetzt auf {role.mention}", ephemeral=True)
+
+# -----------------------------
+# BOT READY
+# -----------------------------
 @bot.event
 async def on_ready():
-    print(f"✅ Bot online als {bot.user}")
-
-    # Persistent Views registrieren
-    bot.add_view(TicketOpenPersistentView())      
-    bot.add_view(TicketClosePersistentView())     
-    bot.add_view(TicketOpenPersistentView2())     
-    bot.add_view(TicketClosePersistentView2())    
-    bot.add_view(TicketOpenPersistentView3())     
-    bot.add_view(TicketClosePersistentView3())    
-
+    bot.add_view(PanicButtonView())
     await bot.tree.sync()
-    print(f"Slash Commands synchronisiert")
+    print(f"Bot ist online als {bot.user}")
 
-# ================= PANEL 1 =================
-@bot.tree.command(name="create-ticket-in", description="Setze die Kategorie für Tickets")
-@app_commands.check(is_admin)
-async def create_ticket_in(interaction: discord.Interaction, category_id: str):
-    global ticket_category_id
-    ticket_category_id = int(category_id)
-    await interaction.response.send_message(f"✅ Ticket Kategorie gesetzt: <#{ticket_category_id}>", ephemeral=True)
-
-@bot.tree.command(name="set-ticket-mod", description="Setze die Ticket-Mod Rolle")
-@app_commands.check(is_admin)
-async def set_ticket_mod(interaction: discord.Interaction, role_id: str):
-    global ticket_mod_role_id
-    ticket_mod_role_id = int(role_id)
-    await interaction.response.send_message(f"✅ Ticket Mod Rolle gesetzt: <@&{ticket_mod_role_id}>", ephemeral=True)
-
-@bot.tree.command(name="ticket-starten", description="Erstellt den Ticket Button")
-@app_commands.check(is_admin)
-async def ticket_starten(interaction: discord.Interaction):
-    embed = discord.Embed(
-        title="📨 Support Ticket",
-        description="Bitte erstelle ein Ticket, um deine Angelegenheiten mit dem Support zu besprechen.",
-        color=SUNFLOWER_YELLOW
-    )
-    view = TicketOpenPersistentView()
-    await interaction.channel.send(embed=embed, view=view)
-    await interaction.response.send_message("✅ Ticket-Nachricht wurde gesendet.", ephemeral=True)
-
-# ================= PANEL 2 =================
-@bot.tree.command(name="create-ticket-in-2", description="Setze die Kategorie für Tickets (Panel 2)")
-@app_commands.check(is_admin)
-async def create_ticket_in_2(interaction: discord.Interaction, category_id: str):
-    global ticket_category_id_2
-    ticket_category_id_2 = int(category_id)
-    await interaction.response.send_message(f"✅ Ticket Kategorie (Panel 2) gesetzt: <#{ticket_category_id_2}>", ephemeral=True)
-
-@bot.tree.command(name="set-ticket-mod-2", description="Setze die Ticket-Mod Rolle (Panel 2)")
-@app_commands.check(is_admin)
-async def set_ticket_mod_2(interaction: discord.Interaction, role_id: str):
-    global ticket_mod_role_id_2
-    ticket_mod_role_id_2 = int(role_id)
-    await interaction.response.send_message(f"✅ Ticket Mod Rolle (Panel 2) gesetzt: <@&{ticket_mod_role_id_2}>", ephemeral=True)
-
-@bot.tree.command(name="set-embed-überschrift-2", description="Setze die Embed Überschrift für Panel 2")
-@app_commands.check(is_admin)
-async def set_embed_überschrift_2(interaction: discord.Interaction, title: str):
-    global embed_title_2
-    embed_title_2 = title
-    await interaction.response.send_message(f"✅ Embed Überschrift (Panel 2) gesetzt: **{embed_title_2}**", ephemeral=True)
-
-@bot.tree.command(name="set-embed-text-2", description="Setze den Embed Text für Panel 2")
-@app_commands.check(is_admin)
-async def set_embed_text_2(interaction: discord.Interaction, text: str):
-    global embed_text_2
-    embed_text_2 = text
-    await interaction.response.send_message(f"✅ Embed Text (Panel 2) gesetzt.", ephemeral=True)
-
-@bot.tree.command(name="ticket-starten-2", description="Erstellt den Ticket Button für Panel 2")
-@app_commands.check(is_admin)
-async def ticket_starten_2(interaction: discord.Interaction):
-    embed = discord.Embed(
-        title=embed_title_2,
-        description=embed_text_2,
-        color=SUNFLOWER_YELLOW
-    )
-    view = TicketOpenPersistentView2()
-    await interaction.channel.send(embed=embed, view=view)
-    await interaction.response.send_message("✅ Ticket-Nachricht (Panel 2) wurde gesendet.", ephemeral=True)
-
-# ================= PANEL 3 =================
-@bot.tree.command(name="create-ticket-in-3", description="Setze die Kategorie für Tickets (Panel 3)")
-@app_commands.check(is_admin)
-async def create_ticket_in_3(interaction: discord.Interaction, category_id: str):
-    global ticket_category_id_3
-    ticket_category_id_3 = int(category_id)
-    await interaction.response.send_message(f"✅ Ticket Kategorie (Panel 3) gesetzt: <#{ticket_category_id_3}>", ephemeral=True)
-
-@bot.tree.command(name="set-ticket-mod-3", description="Setze die Ticket-Mod Rolle (Panel 3)")
-@app_commands.check(is_admin)
-async def set_ticket_mod_3(interaction: discord.Interaction, role_id: str):
-    global ticket_mod_role_id_3
-    ticket_mod_role_id_3 = int(role_id)
-    await interaction.response.send_message(f"✅ Ticket Mod Rolle (Panel 3) gesetzt: <@&{ticket_mod_role_id_3}>", ephemeral=True)
-
-@bot.tree.command(name="set-embed-überschrift-3", description="Setze die Embed Überschrift für Panel 3")
-@app_commands.check(is_admin)
-async def set_embed_überschrift_3(interaction: discord.Interaction, title: str):
-    global embed_title_3
-    embed_title_3 = title
-    await interaction.response.send_message(f"✅ Embed Überschrift (Panel 3) gesetzt: **{embed_title_3}**", ephemeral=True)
-
-@bot.tree.command(name="set-embed-text-3", description="Setze den Embed Text für Panel 3")
-@app_commands.check(is_admin)
-async def set_embed_text_3(interaction: discord.Interaction, text: str):
-    global embed_text_3
-    embed_text_3 = text
-    await interaction.response.send_message(f"✅ Embed Text (Panel 3) gesetzt.", ephemeral=True)
-
-@bot.tree.command(name="ticket-starten-3", description="Erstellt den Ticket Button für Panel 3")
-@app_commands.check(is_admin)
-async def ticket_starten_3(interaction: discord.Interaction):
-    embed = discord.Embed(
-        title=embed_title_3,
-        description=embed_text_3,
-        color=SUNFLOWER_YELLOW
-    )
-    view = TicketOpenPersistentView3()
-    await interaction.channel.send(embed=embed, view=view)
-    await interaction.response.send_message("✅ Ticket-Nachricht (Panel 3) wurde gesendet.", ephemeral=True)
-
-# ================= ERROR HANDLER =================
-@create_ticket_in.error
-@set_ticket_mod.error
-@ticket_starten.error
-@create_ticket_in_2.error
-@set_ticket_mod_2.error
-@set_embed_überschrift_2.error
-@set_embed_text_2.error
-@ticket_starten_2.error
-@create_ticket_in_3.error
-@set_ticket_mod_3.error
-@set_embed_überschrift_3.error
-@set_embed_text_3.error
-@ticket_starten_3.error
-async def admin_error(interaction: discord.Interaction, error):
-    if isinstance(error, app_commands.CheckFailure):
-        await interaction.response.send_message("❌ Du hast keine Administratorrechte, um diesen Befehl zu nutzen.", ephemeral=True)
-
-# ================= HELPER FUNKTION =================
-async def user_has_open_ticket(guild, user, category_id):
-    """Überprüft, ob der Nutzer bereits ein Ticket in der Kategorie hat."""
-    category = guild.get_channel(category_id)
-    if not category:
-        return False
-    for channel in category.text_channels:
-        if channel.permissions_for(user).view_channel:
-            if str(user.id) in [str(o.id) for o in channel.overwrites if isinstance(o, discord.Member)]:
-                return True
-    return False
-
-# ================= BUTTON VIEWS =================
-# PANEL 1
-class TicketOpenPersistentView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(label="📨 Ticket erstellen", style=discord.ButtonStyle.primary, custom_id="ticket_open")
-    async def ticket_open_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        global ticket_count, ticket_category_id, ticket_mod_role_id
-        if ticket_category_id is None:
-            await interaction.response.send_message("❌ Es wurde keine Ticket-Kategorie gesetzt!", ephemeral=True)
-            return
-        
-        if await user_has_open_ticket(interaction.guild, interaction.user, ticket_category_id):
-            await interaction.response.send_message("⚠️ Du hast bereits ein offenes Ticket in diesem Panel.", ephemeral=True)
-            return
-
-        ticket_count += 1
-        guild = interaction.guild
-        category = guild.get_channel(ticket_category_id)
-        if category is None:
-            await interaction.response.send_message("❌ Die angegebene Kategorie existiert nicht oder ist ungültig.", ephemeral=True)
-            return
-
-        overwrites = {
-            guild.default_role: discord.PermissionOverwrite(view_channel=False),
-            interaction.user: discord.PermissionOverwrite(view_channel=True, send_messages=True, attach_files=True),
-        }
-
-        if ticket_mod_role_id:
-            role = guild.get_role(ticket_mod_role_id)
-            overwrites[role] = discord.PermissionOverwrite(view_channel=True, send_messages=True)
-
-        channel = await guild.create_text_channel(
-            name=f"mg-ticket-{ticket_count}",
-            category=category,
-            overwrites=overwrites
-        )
-
-        ping_msg = f"<@{interaction.user.id}>"
-        if ticket_mod_role_id:
-            ping_msg += f" <@&{ticket_mod_role_id}>"
-
-        await channel.send(ping_msg)
-
-        embed = discord.Embed(
-            description="Bitte haben Sie ein wenig Geduld, der Support wird sich um Sie kümmern.",
-            color=SUNFLOWER_YELLOW
-        )
-        view = TicketClosePersistentView()
-        await channel.send(embed=embed, view=view)
-        await interaction.response.send_message(f"✅ Ticket erstellt: {channel.mention}", ephemeral=True)
-
-class TicketClosePersistentView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(label="❌ Ticket schließen", style=discord.ButtonStyle.danger, custom_id="ticket_close")
-    async def ticket_close_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        view = ConfirmCloseView(interaction.channel)
-        await interaction.response.send_message("Möchtest du das Ticket wirklich schließen?", view=view, ephemeral=True)
-
-# PANEL 2
-class TicketOpenPersistentView2(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(label="📨 Ticket erstellen", style=discord.ButtonStyle.primary, custom_id="ticket_open_2")
-    async def ticket_open_button_2(self, interaction: discord.Interaction, button: discord.ui.Button):
-        global ticket_count_2, ticket_category_id_2, ticket_mod_role_id_2
-        if ticket_category_id_2 is None:
-            await interaction.response.send_message("❌ Es wurde keine Ticket-Kategorie gesetzt!", ephemeral=True)
-            return
-        
-        if await user_has_open_ticket(interaction.guild, interaction.user, ticket_category_id_2):
-            await interaction.response.send_message("⚠️ Du hast bereits ein offenes Ticket in diesem Panel.", ephemeral=True)
-            return
-
-        ticket_count_2 += 1
-        guild = interaction.guild
-        category = guild.get_channel(ticket_category_id_2)
-        if category is None:
-            await interaction.response.send_message("❌ Die angegebene Kategorie existiert nicht oder ist ungültig.", ephemeral=True)
-            return
-
-        overwrites = {
-            guild.default_role: discord.PermissionOverwrite(view_channel=False),
-            interaction.user: discord.PermissionOverwrite(view_channel=True, send_messages=True, attach_files=True),
-        }
-
-        if ticket_mod_role_id_2:
-            role = guild.get_role(ticket_mod_role_id_2)
-            overwrites[role] = discord.PermissionOverwrite(view_channel=True, send_messages=True)
-
-        channel = await guild.create_text_channel(
-            name=f"mg-ticket-{ticket_count_2}",
-            category=category,
-            overwrites=overwrites
-        )
-
-        ping_msg = f"<@{interaction.user.id}>"
-        if ticket_mod_role_id_2:
-            ping_msg += f" <@&{ticket_mod_role_id_2}>"
-
-        await channel.send(ping_msg)
-
-        embed = discord.Embed(
-            description="Bitte haben Sie ein wenig Geduld, der Support wird sich um Sie kümmern.",
-            color=SUNFLOWER_YELLOW
-        )
-        view = TicketClosePersistentView2()
-        await channel.send(embed=embed, view=view)
-        await interaction.response.send_message(f"✅ Ticket erstellt: {channel.mention}", ephemeral=True)
-
-class TicketClosePersistentView2(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(label="❌ Ticket schließen", style=discord.ButtonStyle.danger, custom_id="ticket_close_2")
-    async def ticket_close_button_2(self, interaction: discord.Interaction, button: discord.ui.Button):
-        view = ConfirmCloseView(interaction.channel)
-        await interaction.response.send_message("Möchtest du das Ticket wirklich schließen?", view=view, ephemeral=True)
-
-# PANEL 3
-class TicketOpenPersistentView3(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(label="📨 Ticket erstellen", style=discord.ButtonStyle.primary, custom_id="ticket_open_3")
-    async def ticket_open_button_3(self, interaction: discord.Interaction, button: discord.ui.Button):
-        global ticket_count_3, ticket_category_id_3, ticket_mod_role_id_3
-        if ticket_category_id_3 is None:
-            await interaction.response.send_message("❌ Es wurde keine Ticket-Kategorie gesetzt!", ephemeral=True)
-            return
-        
-        if await user_has_open_ticket(interaction.guild, interaction.user, ticket_category_id_3):
-            await interaction.response.send_message("⚠️ Du hast bereits ein offenes Ticket in diesem Panel.", ephemeral=True)
-            return
-
-        ticket_count_3 += 1
-        guild = interaction.guild
-        category = guild.get_channel(ticket_category_id_3)
-        if category is None:
-            await interaction.response.send_message("❌ Die angegebene Kategorie existiert nicht oder ist ungültig.", ephemeral=True)
-            return
-
-        overwrites = {
-            guild.default_role: discord.PermissionOverwrite(view_channel=False),
-            interaction.user: discord.PermissionOverwrite(view_channel=True, send_messages=True, attach_files=True),
-        }
-
-        if ticket_mod_role_id_3:
-            role = guild.get_role(ticket_mod_role_id_3)
-            overwrites[role] = discord.PermissionOverwrite(view_channel=True, send_messages=True)
-
-        channel = await guild.create_text_channel(
-            name=f"mg-ticket-{ticket_count_3}",
-            category=category,
-            overwrites=overwrites
-        )
-
-        ping_msg = f"<@{interaction.user.id}>"
-        if ticket_mod_role_id_3:
-            ping_msg += f" <@&{ticket_mod_role_id_3}>"
-
-        await channel.send(ping_msg)
-
-        embed = discord.Embed(
-            description="Bitte haben Sie ein wenig Geduld, der Support wird sich um Sie kümmern.",
-            color=SUNFLOWER_YELLOW
-        )
-        view = TicketClosePersistentView3()
-        await channel.send(embed=embed, view=view)
-        await interaction.response.send_message(f"✅ Ticket erstellt: {channel.mention}", ephemeral=True)
-
-class TicketClosePersistentView3(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(label="❌ Ticket schließen", style=discord.ButtonStyle.danger, custom_id="ticket_close_3")
-    async def ticket_close_button_3(self, interaction: discord.Interaction, button: discord.ui.Button):
-        view = ConfirmCloseView(interaction.channel)
-        await interaction.response.send_message("Möchtest du das Ticket wirklich schließen?", view=view, ephemeral=True)
-
-# ================= CONFIRM CLOSE =================
-class ConfirmCloseView(discord.ui.View):
-    def __init__(self, channel):
-        super().__init__(timeout=30)
-        self.channel = channel
-        self.add_item(ConfirmYesButton(channel))
-        self.add_item(ConfirmNoButton())
-
-class ConfirmYesButton(discord.ui.Button):
-    def __init__(self, channel):
-        super().__init__(label="Ja", style=discord.ButtonStyle.success, custom_id="confirm_yes")
-        self.channel = channel
-
-    async def callback(self, interaction: discord.Interaction):
-        await interaction.response.send_message("✅ Ticket wird geschlossen...", ephemeral=True)
-        await asyncio.sleep(2)
-        await self.channel.delete()
-
-class ConfirmNoButton(discord.ui.Button):
-    def __init__(self):
-        super().__init__(label="Nein", style=discord.ButtonStyle.secondary, custom_id="confirm_no")
-
-    async def callback(self, interaction: discord.Interaction):
-        await interaction.response.send_message("❌ Ticket bleibt geöffnet.", ephemeral=True)
-
-# =================== $close COMMAND ===================
-@bot.command(name="close")
-async def close_ticket(ctx):
-    """Schließt ein Ticket über den Textbefehl $close (egal welches Panel)."""
-    if isinstance(ctx.channel, discord.TextChannel):
-        if ctx.channel.name.lower().startswith(("mg-ticket-")):
-            await ctx.send("✅ Ticket wird geschlossen...")
-            await asyncio.sleep(2)
-            await ctx.channel.delete()
-        else:
-            await ctx.send("❌ Dieser Befehl kann nur in einem Ticket-Channel verwendet werden.")
-    else:
-        await ctx.send("❌ Dieser Befehl kann nur in einem Textkanal verwendet werden.")
-
-# ================= START BOT =================
-bot.run(os.getenv("DISCORD_TOKEN"))
+bot.run(TOKEN)
