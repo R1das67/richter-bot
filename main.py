@@ -200,37 +200,9 @@ async def roblox_get_avatar_url(session: aiohttp.ClientSession, user_id: int, si
         return None
     return None
 
-async def roblox_resolve_game_name(session, place_id: Optional[int], last_location: Optional[str], universe_id: Optional[int] = None):
-    if last_location:
-        return str(last_location)
-    if place_id:
-        url = "https://games.roblox.com/v1/games/multiget-place-details"
-        params = {"placeIds": str(place_id)}
-        try:
-            async with session.get(url, params=params, timeout=10) as resp:
-                if resp.status == 200:
-                    js = await resp.json()
-                    if isinstance(js, list) and len(js) > 0:
-                        name = js[0].get("name")
-                        if name:
-                            return name
-        except:
-            pass
-    if universe_id:
-        url = f"https://games.roblox.com/v1/games?universeIds={universe_id}"
-        try:
-            async with session.get(url, timeout=10) as resp:
-                if resp.status == 200:
-                    js = await resp.json()
-                    if "data" in js and len(js["data"]) > 0:
-                        return js["data"][0].get("name", "Unbekannt")
-        except:
-            pass
-    return "Unbekannt"
-
-def build_online_embed(display_name: str, username: str, game_name: str, avatar_url: Optional[str]) -> discord.Embed:
+def build_online_embed(display_name: str, username: str, avatar_url: Optional[str]) -> discord.Embed:
     title = "🟢**Online!**🟢"
-    description = f"**{display_name} ({username})** is online!\nHe/She play: **{game_name}**"
+    description = f"**{display_name} ({username})** is online!"
     e = discord.Embed(title=title, description=description, color=COLOR_GREEN)
     if avatar_url:
         e.set_thumbnail(url=avatar_url)
@@ -238,7 +210,7 @@ def build_online_embed(display_name: str, username: str, game_name: str, avatar_
 
 def build_offline_embed(display_name: str, username: str, avatar_url: Optional[str], played_str: str = "") -> discord.Embed:
     title = "🔴**Offline!**🔴"
-    description = f"**{display_name} ({username})** is offline!\nHe/She is now offline!{played_str}"
+    description = f"**{display_name} ({username})** is offline!{played_str}"
     e = discord.Embed(title=title, description=description, color=COLOR_RED)
     if avatar_url:
         e.set_thumbnail(url=avatar_url)
@@ -338,11 +310,6 @@ async def presence_poll():
                 display_name = tracked_item.get("displayName", username)
                 pres = pres_by_id.get(uid)
                 online_now = pres.get("userPresenceType") == 2 if pres else False
-                last_location = pres.get("lastLocation") if pres else None
-                place_id = pres.get("placeId") if pres else None
-                universe_id = pres.get("universeId") if pres else None
-
-                game_name = await roblox_resolve_game_name(session, place_id, last_location, universe_id)
 
                 current = "ONLINE" if online_now else "OFFLINE"
                 previous = last_status.get(uid)
@@ -353,7 +320,7 @@ async def presence_poll():
 
                     if current == "ONLINE":
                         online_start_times[uid] = time.time()
-                        embed = build_online_embed(display_name, username, game_name, avatar_url)
+                        embed = build_online_embed(display_name, username, avatar_url)
                     else:
                         start_time = online_start_times.pop(uid, None)
                         played_str = ""
