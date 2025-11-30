@@ -30,8 +30,8 @@ bot = commands.Bot(command_prefix="$", intents=intents)
 default_data = {
     "panic_channel": None,
     "panic_role": None,
-    "tracked": [],      # Für Roblox User
-    "log_channel": None # Für Roblox Embeds
+    "tracked": [],
+    "log_channel": None
 }
 
 if os.path.exists(DATA_FILE):
@@ -143,8 +143,8 @@ async def set_panic_role(interaction: discord.Interaction, role: discord.Role):
 # -----------------------------
 # ROBLOX TRACKING
 # -----------------------------
-last_status: Dict[int, str] = {}  # userId -> "ONLINE"/"OFFLINE"
-online_start_times: Dict[int, float] = {}  # userId -> online start time
+last_status: Dict[int, str] = {}
+online_start_times: Dict[int, float] = {}
 
 def format_played_time(seconds: float) -> str:
     if seconds < 60:
@@ -200,7 +200,7 @@ async def roblox_get_avatar_url(session: aiohttp.ClientSession, user_id: int, si
         return None
     return None
 
-async def roblox_resolve_game_name(session: aiohttp.ClientSession, place_id: Optional[int], last_location: Optional[str]) -> str:
+async def roblox_resolve_game_name(session, place_id: Optional[int], last_location: Optional[str], universe_id: Optional[int] = None):
     if last_location:
         return str(last_location)
     if place_id:
@@ -211,7 +211,19 @@ async def roblox_resolve_game_name(session: aiohttp.ClientSession, place_id: Opt
                 if resp.status == 200:
                     js = await resp.json()
                     if isinstance(js, list) and len(js) > 0:
-                        return js[0].get("name", str(place_id))
+                        name = js[0].get("name")
+                        if name:
+                            return name
+        except:
+            pass
+    if universe_id:
+        url = f"https://games.roblox.com/v1/games?universeIds={universe_id}"
+        try:
+            async with session.get(url, timeout=10) as resp:
+                if resp.status == 200:
+                    js = await resp.json()
+                    if "data" in js and len(js["data"]) > 0:
+                        return js["data"][0].get("name", "Unbekannt")
         except:
             pass
     return "Unbekannt"
@@ -328,17 +340,21 @@ async def presence_poll():
                 online_now = pres.get("userPresenceType") == 2 if pres else False
                 last_location = pres.get("lastLocation") if pres else None
                 place_id = pres.get("placeId") if pres else None
+                universe_id = pres.get("universeId") if pres else None
+
+                game_name = await roblox_resolve_game_name(session, place_id, last_location, universe_id)
+
                 current = "ONLINE" if online_now else "OFFLINE"
                 previous = last_status.get(uid)
+
                 if current != previous:
                     last_status[uid] = current
                     avatar_url = await roblox_get_avatar_url(session, uid)
-                    game_name = await roblox_resolve_game_name(session, place_id, last_location)
 
                     if current == "ONLINE":
                         online_start_times[uid] = time.time()
                         embed = build_online_embed(display_name, username, game_name, avatar_url)
-                    else:  # Offline
+                    else:
                         start_time = online_start_times.pop(uid, None)
                         played_str = ""
                         if start_time:
