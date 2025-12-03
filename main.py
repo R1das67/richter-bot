@@ -273,7 +273,7 @@ async def choose_bounty_log(interaction: discord.Interaction, channel: discord.T
     await interaction.response.send_message(f"Log channel gesetzt auf {channel.mention}", ephemeral=True)
 
 @bot.tree.command(name="add-user", description="Add a Roblox user by ID to the tracked list")
-@app_commands.describe(user_id="Roblox user ID (numerical)"])
+@app_commands.describe(user_id="Roblox user ID (numerical)")
 async def add_user(interaction: discord.Interaction, user_id: int):
     if not admin_check(interaction):
         await interaction.response.send_message("Nur Admins dürfen diesen Befehl nutzen.", ephemeral=True)
@@ -407,3 +407,4 @@ async def on_ready():
     print(f"Bot ist online als {bot.user}")
 
 bot.run(TOKEN)
+
