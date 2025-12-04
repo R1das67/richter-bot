@@ -4,7 +4,7 @@ from discord.ext import commands, tasks
 from discord import app_commands
 import aiohttp
 import json
-from typing import List, Dict, Optional
+from typing import List, Dict
 import time
 
 # -----------------------------
@@ -152,13 +152,11 @@ def format_played_time(seconds: int) -> str:
 # -----------------------------
 # EMBED BUILDERS
 # -----------------------------
-def small_user(display, username):
-    return f"**{display} ({username})**"
-
 def embed_playing(display, username, avatar, game_name, game_link):
+    description = f"**{display} ({username})** is now playing!\nLocation: {game_name or 'Unbekannt'}"
     e = discord.Embed(
         title="🟢 Playing",
-        description=f"{small_user(display, username)} is now playing!\nLocation: {game_name}",
+        description=description,
         color=COLOR_PLAYING
     )
     if avatar: e.set_thumbnail(url=avatar)
@@ -168,7 +166,7 @@ def embed_playing(display, username, avatar, game_name, game_link):
 def embed_offline(display, username, avatar, played_str):
     e = discord.Embed(
         title="🔴 Offline",
-        description=f"{small_user(display, username)} is offline!\nPlayed for: {played_str}",
+        description=f"**{display} ({username})** is offline!\nPlayed for: {played_str}",
         color=COLOR_OFFLINE
     )
     if avatar: e.set_thumbnail(url=avatar)
@@ -211,7 +209,7 @@ async def set_panic_role(interaction: discord.Interaction, role: discord.Role):
 @bot.tree.command(name="choose-bounty-log", description="Setze Log-Channel für Status Embeds")
 async def choose_bounty_log(interaction: discord.Interaction, channel: discord.TextChannel):
     if not is_admin(interaction):
-        await interaction.response.send_message("Nur Admins dürfen diesen Befehl nutzen.", ephemeral=True)
+        await interaction.response.send_message("❌ Nur Admins dürfen diesen Befehl nutzen.", ephemeral=True)
         return
     data["log_channel"] = channel.id
     save_data()
