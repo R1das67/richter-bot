@@ -4,7 +4,7 @@ from discord.ext import commands, tasks
 from discord import app_commands
 import aiohttp
 import json
-from typing import List, Dict
+from typing import List, Dict, Optional
 import time
 
 # -----------------------------
@@ -15,7 +15,7 @@ if not TOKEN:
     raise ValueError("❌ TOKEN nicht gesetzt!")
 
 DATA_FILE = "bot_data.json"
-POLL_INTERVAL = 30
+POLL_INTERVAL = 30  # Sekunden
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -27,33 +27,29 @@ bot = commands.Bot(command_prefix="$", intents=intents)
 # -----------------------------
 # DATA HANDLING
 # -----------------------------
+if os.path.exists(DATA_FILE):
+    with open(DATA_FILE, "r") as f:
+        data = json.load(f)
+else:
+    data = {
+        "panic_channel": None,
+        "panic_role": None,
+        "tracked": [],
+        "log_channel": None
+    }
+    with open(DATA_FILE, "w") as f:
+        json.dump(data, f, indent=4)
+
 def save_data():
     with open(DATA_FILE, "w") as f:
         json.dump(data, f, indent=4)
 
-def load_data():
-    global data
-    if os.path.exists(DATA_FILE):
-        with open(DATA_FILE, "r") as f:
-            data = json.load(f)
-    else:
-        data = {
-            "panic_channel": None,
-            "panic_role": None,
-            "tracked": [],
-            "log_channel": None
-        }
-        save_data()
-
-load_data()
-
 # -----------------------------
 # COLORS
 # -----------------------------
-COLOR_MENU = discord.Color.from_rgb(80, 150, 255)
+RED = discord.Color.red()
 COLOR_PLAYING = discord.Color.from_rgb(64, 255, 64)
 COLOR_OFFLINE = discord.Color.from_rgb(255, 64, 64)
-RED = discord.Color.red()
 
 # -----------------------------
 # PANIC SYSTEM
@@ -73,10 +69,7 @@ class PanicModal(discord.ui.Modal, title="🚨 Panic Request"):
         channel = interaction.client.get_channel(panic_channel_id)
         role_ping = f"<@&{panic_role_id}>"
 
-        embed = discord.Embed(
-            title=f"🚨 Panic Button pressed by {interaction.user}", 
-            color=RED
-        )
+        embed = discord.Embed(title=f"🚨 Panic Button pressed by {interaction.user}", color=RED)
         embed.add_field(name="Roblox Username", value=self.username.value, inline=False)
         embed.add_field(name="Location", value=self.location.value, inline=False)
         embed.add_field(name="Additional Information", value=self.additional_info.value or "Keine", inline=False)
@@ -110,8 +103,9 @@ async def roblox_get_game_data(session, place_id):
     url = f"https://games.roblox.com/v1/games?universeIds={place_id}"
     try:
         async with session.get(url, timeout=10) as resp:
+            if resp.status != 200: return None
             js = await resp.json()
-            return js["data"][0]["name"] if resp.status == 200 and js.get("data") else None
+            return js["data"][0]["name"] if js.get("data") else None
     except:
         return None
 
@@ -121,18 +115,12 @@ async def roblox_get_game_info_from_presence(pres, session):
     game_name = None
     game_link = None
 
-    # Zuerst Spielname von Roblox API
     if place_id:
         game_name = await roblox_get_game_data(session, place_id)
         if game_name:
             game_link = f"https://www.roblox.com/games/{place_id}"
-
-    # Fallbacks
     if not game_name:
-        if last_location:
-            game_name = last_location
-        else:
-            game_name = "Öffentlicher Server"
+        game_name = last_location or "Öffentlicher Server"
 
     return game_name, game_link, "Playing"
 
@@ -167,19 +155,10 @@ def format_played_time(seconds: int) -> str:
 def small_user(display, username):
     return f"**{display} ({username})**"
 
-def embed_menu(display, username, avatar):
-    e = discord.Embed(
-        title="🔵 Online",
-        description=f"{small_user(display, username)} is right now online!\nLocation: Roblox Menü",
-        color=COLOR_MENU
-    )
-    if avatar: e.set_thumbnail(url=avatar)
-    return e
-
 def embed_playing(display, username, avatar, game_name, game_link):
     e = discord.Embed(
         title="🟢 Playing",
-        description=f"{small_user(display, username)} is right now playing!\nLocation: {game_name}",
+        description=f"{small_user(display, username)} is now playing!\nLocation: {game_name}",
         color=COLOR_PLAYING
     )
     if avatar: e.set_thumbnail(url=avatar)
@@ -189,7 +168,7 @@ def embed_playing(display, username, avatar, game_name, game_link):
 def embed_offline(display, username, avatar, played_str):
     e = discord.Embed(
         title="🔴 Offline",
-        description=f"{small_user(display, username)} is right now offline!\nPlayed for: {played_str}",
+        description=f"{small_user(display, username)} is offline!\nPlayed for: {played_str}",
         color=COLOR_OFFLINE
     )
     if avatar: e.set_thumbnail(url=avatar)
@@ -295,10 +274,10 @@ async def show_bounty_list(interaction: discord.Interaction):
 # -----------------------------
 @tasks.loop(seconds=POLL_INTERVAL)
 async def presence_poll():
-    if not bot.is_ready() or not data.get("tracked") or not data.get("log_channel"):
+    if not bot.is_ready() or not data.get("tracked") or not data.get("log_channel"): 
         return
     log_channel = bot.get_channel(data["log_channel"])
-    if not log_channel:
+    if not log_channel: 
         return
     user_ids = [t["userId"] for t in data["tracked"]]
     async with aiohttp.ClientSession() as session:
@@ -313,16 +292,11 @@ async def presence_poll():
             status = "OFFLINE" if ptype == 0 else "MENU" if ptype == 1 else "PLAYING"
             prev = last_status.get(uid)
 
-            # Status-Änderung
             if status != prev:
                 last_status[uid] = status
                 avatar = await roblox_get_avatar_url(session, uid)
 
-                if status == "MENU":
-                    online_start_times.setdefault(uid, time.time())
-                    embed = embed_menu(display, username, avatar)
-
-                elif status == "PLAYING":
+                if status == "PLAYING":
                     online_start_times.setdefault(uid, time.time())
                     game_name, game_link, _ = await roblox_get_game_info_from_presence(pres, session)
                     embed = embed_playing(display, username, avatar, game_name, game_link)
@@ -342,7 +316,7 @@ async def presence_poll():
 async def on_ready():
     bot.add_view(PanicButtonView())
     await bot.tree.sync()
-    if not presence_poll.is_running():
+    if not presence_poll.is_running(): 
         presence_poll.start()
     print(f"Bot ist online als {bot.user}")
 
