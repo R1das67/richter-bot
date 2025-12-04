@@ -47,7 +47,9 @@ def load_data():
 
 load_data()
 
-# Colors
+# -----------------------------
+# COLORS
+# -----------------------------
 COLOR_MENU = discord.Color.from_rgb(80, 150, 255)
 COLOR_PLAYING = discord.Color.from_rgb(64, 255, 64)
 COLOR_OFFLINE = discord.Color.from_rgb(255, 64, 64)
@@ -64,7 +66,6 @@ class PanicModal(discord.ui.Modal, title="🚨 Panic Request"):
     async def on_submit(self, interaction: discord.Interaction):
         panic_channel_id = data.get("panic_channel")
         panic_role_id = data.get("panic_role")
-
         if panic_channel_id is None or panic_role_id is None:
             await interaction.response.send_message("❌ Panic-Channel oder Panic-Rolle nicht gesetzt!", ephemeral=True)
             return
@@ -81,7 +82,8 @@ class PanicModal(discord.ui.Modal, title="🚨 Panic Request"):
         await interaction.response.send_message("✅ Panic Alert gesendet!", ephemeral=True)
 
 class PanicButtonView(discord.ui.View):
-    def __init__(self): super().__init__(timeout=None)
+    def __init__(self):
+        super().__init__(timeout=None)
 
     @discord.ui.button(label="🚨 Panic", style=discord.ButtonStyle.danger, custom_id="panic_button")
     async def panic_button_callback(self, interaction, button):
@@ -111,10 +113,26 @@ async def roblox_get_game_data(session, place_id):
         return None
 
 async def roblox_get_game_info_from_presence(pres, session):
-    place_id = pres.get("placeId")
-    if not place_id or place_id == 0: return None, None, None
-    game_name = await roblox_get_game_data(session, place_id)
-    game_link = f"https://www.roblox.com/games/{place_id}"
+    # Nutze placeId, rootPlaceId oder lastLocation
+    place_id = pres.get("placeId") or pres.get("rootPlaceId")
+    last_location = pres.get("lastLocation")
+    game_name = None
+    game_link = None
+
+    if place_id:
+        game_name = await roblox_get_game_data(session, place_id)
+        if game_name:
+            game_link = f"https://www.roblox.com/games/{place_id}"
+        else:
+            game_name = f"Place {place_id}"
+            game_link = None
+    elif last_location:
+        game_name = last_location
+        game_link = None
+    else:
+        game_name = "Öffentlicher Server"
+        game_link = None
+
     return game_name, game_link, "Playing"
 
 async def roblox_get_avatar_url(session, user_id, size=150):
@@ -145,27 +163,34 @@ def format_played_time(seconds: int) -> str:
 # -----------------------------
 # EMBED BUILDERS
 # -----------------------------
-def small_user(display, username): return f"**{display} ({username})**"
+def small_user(display, username):
+    return f"**{display} ({username})**"
 
 def embed_menu(display, username, avatar):
-    e = discord.Embed(title="🔵 Online",
-                      description=f"{small_user(display, username)} is right now online!\nLocation: Roblox Menü",
-                      color=COLOR_MENU)
+    e = discord.Embed(
+        title="🔵 Online",
+        description=f"{small_user(display, username)} is right now online!\nLocation: Roblox Menü",
+        color=COLOR_MENU
+    )
     if avatar: e.set_thumbnail(url=avatar)
     return e
 
 def embed_playing(display, username, avatar, game_name, game_link):
-    e = discord.Embed(title="🟢 Playing",
-                      description=f"{small_user(display, username)} is right now playing!\nLocation: {game_name}",
-                      color=COLOR_PLAYING)
+    e = discord.Embed(
+        title="🟢 Playing",
+        description=f"{small_user(display, username)} is right now playing!\nLocation: {game_name}",
+        color=COLOR_PLAYING
+    )
     if avatar: e.set_thumbnail(url=avatar)
     if game_link: e.set_author(name=game_name, url=game_link)
     return e
 
 def embed_offline(display, username, avatar, played_str):
-    e = discord.Embed(title="🔴 Offline",
-                      description=f"{small_user(display, username)} is right now offline!\nPlayed for: {played_str}",
-                      color=COLOR_OFFLINE)
+    e = discord.Embed(
+        title="🔴 Offline",
+        description=f"{small_user(display, username)} is right now offline!\nPlayed for: {played_str}",
+        color=COLOR_OFFLINE
+    )
     if avatar: e.set_thumbnail(url=avatar)
     return e
 
@@ -287,19 +312,22 @@ async def presence_poll():
             if status != prev:
                 last_status[uid] = status
                 avatar = await roblox_get_avatar_url(session, uid)
+
                 if status == "MENU":
                     online_start_times.setdefault(uid, time.time())
                     embed = embed_menu(display, username, avatar)
+
                 elif status == "PLAYING":
                     online_start_times.setdefault(uid, time.time())
                     game_name, game_link, _ = await roblox_get_game_info_from_presence(pres, session)
-                    if not game_name: game_name = f"Place {pres.get('placeId')}"
                     embed = embed_playing(display, username, avatar, game_name, game_link)
-                else:
+
+                else:  # OFFLINE
                     start = online_start_times.pop(uid, None)
                     played = int(time.time() - start) if start else 0
                     played_fmt = format_played_time(played)
                     embed = embed_offline(display, username, avatar, played_fmt)
+
                 await log_channel.send(embed=embed)
 
 # -----------------------------
