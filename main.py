@@ -142,10 +142,14 @@ def format_played_time(seconds: int) -> str:
 def small_user(display, username): return f"**{display} ({username})**"
 
 def embed_menu(display, username, avatar):
-    e = discord.Embed(title="🔵 Online", description=f"{small_user(display, username)} is right now online!
-Location: Roblox Menü", color=COLOR_MENU)
-    if avatar: e.set_thumbnail(url=avatar)
-    return e
+    e = discord.Embed(
+        title="🔵 Online",
+        description=(
+        f"{small_user(display, username)} is right now online!\n"
+        f"Location: Roblox Menü"
+     ),
+     color=0x4da6ff
+ )
 
 def embed_playing(display, username, avatar, game_name, game_link):
     e = discord.Embed(title="🟢 Playing", description=f"{small_user(display, username)} is right now playing!
@@ -219,3 +223,4 @@ async def on_ready():
     print(f"Bot ist online als {bot.user}")
 
 bot.run(TOKEN)
+
