@@ -139,31 +139,56 @@ def format_played_time(seconds: int) -> str:
 # -----------------------------
 # EMBED BUILDERS
 # -----------------------------
-def small_user(display, username): return f"**{display} ({username})**"
+def small_user(display, username):
+    return f"**{display} ({username})**"
+
 
 def embed_menu(display, username, avatar):
     e = discord.Embed(
         title="🔵 Online",
         description=(
-        f"{small_user(display, username)} is right now online!\n"
-        f"Location: Roblox Menü"
-     ),
-     color=0x4da6ff
- )
+            f"{small_user(display, username)} is right now online!\n"
+            f"Location: Roblox Menü"
+        ),
+        color=0x4da6ff
+    )
+    if avatar:
+        e.set_thumbnail(url=avatar)
+    return e
+
 
 def embed_playing(display, username, avatar, game_name, game_link):
-    e = discord.Embed(title="🟢 Playing", description=f"{small_user(display, username)} is right now playing!
-Location: {game_name}", color=COLOR_PLAYING)
-    if avatar: e.set_thumbnail(url=avatar)
-    e.set_author(name=game_name, url=game_link)
+    e = discord.Embed(
+        title="🟢 Playing",
+        description=(
+            f"{small_user(display, username)} is right now playing!\n"
+            f"Location: {game_name}"
+        ),
+        color=COLOR_PLAYING
+    )
+    if avatar:
+        e.set_thumbnail(url=avatar)
+
+    # Autor (klickbar)
+    if game_link:
+        e.set_author(name=game_name, url=game_link)
+
     return e
+
 
 def embed_offline(display, username, avatar, played_str):
-    e = discord.Embed(title="🔴 Offline", description=f"{small_user(display, username)} is right now offline!
-Played for: {played_str}", color=COLOR_OFFLINE)
-    if avatar: e.set_thumbnail(url=avatar)
+    e = discord.Embed(
+        title="🔴 Offline",
+        description=(
+            f"{small_user(display, username)} is right now offline!\n"
+            f"Played for: {played_str}"
+        ),
+        color=COLOR_OFFLINE
+    )
+    if avatar:
+        e.set_thumbnail(url=avatar)
     return e
-
+    
 # -----------------------------
 # BACKGROUND POLLING
 # -----------------------------
@@ -223,4 +248,5 @@ async def on_ready():
     print(f"Bot ist online als {bot.user}")
 
 bot.run(TOKEN)
+
 
