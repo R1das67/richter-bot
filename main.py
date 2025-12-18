@@ -61,23 +61,46 @@ async def get_presence(uid: int):
             data = await r.json()
             return data["userPresences"][0]
 
-async def get_game_name_webapi(place_id: int) -> str:
+# ================== GAME NAME – MODERN API ==================
+async def get_game_name_modern(place_id: int) -> str:
     """
-    Liefert den Spielnamen anhand der Roblox-Web-API (api.roblox.com/places/{placeId})
+    Liefert den Spielnamen mit allen modernen Roblox-APIs.
+    Versucht zuerst Universe -> Games, dann direkt Place -> Games.
     """
     if not place_id:
         return "Unknown Game"
 
-    url = f"https://api.roblox.com/places/{place_id}"
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get(url) as r:
-                if r.status != 200:
-                    return "Unknown Game"
-                data = await r.json()
-                return data.get("name", "Unknown Game")
+            # 1️⃣ Place → Universe
+            async with session.get(f"https://apis.roblox.com/universes/v1/places/{place_id}/universe") as r1:
+                if r1.status == 200:
+                    data1 = await r1.json()
+                    universe_id = data1.get("universeId")
+                else:
+                    universe_id = None
+
+            # 2️⃣ Universe → Game Name
+            if universe_id:
+                async with session.get(f"https://games.roblox.com/v1/games?universeIds={universe_id}") as r2:
+                    if r2.status == 200:
+                        data2 = await r2.json()
+                        game_data = data2.get("data")
+                        if game_data and len(game_data) > 0:
+                            return game_data[0].get("name", "Unknown Game")
+
+            # 3️⃣ Fallback: Place direkt prüfen
+            async with session.get(f"https://games.roblox.com/v1/games?placeIds={place_id}") as r3:
+                if r3.status == 200:
+                    data3 = await r3.json()
+                    game_data3 = data3.get("data")
+                    if game_data3 and len(game_data3) > 0:
+                        return game_data3[0].get("name", "Unknown Game")
+
+            return "Unknown Game"
+
     except Exception as e:
-        print(f"Fehler beim Abrufen des Game-Namens (Web-API): {e}")
+        print(f"Fehler beim Abrufen des Game-Namens (modern APIs): {e}")
         return "Unknown Game"
 
 # ================== SLASH COMMANDS ==================
@@ -232,7 +255,7 @@ async def monitor_users():
             elif status == 2:
                 embed.color = discord.Color.green()
                 place_id = presence.get("placeId")
-                game_name = await get_game_name_webapi(place_id)
+                game_name = await get_game_name_modern(place_id)
                 embed.description = f"**Is now playing!**\n**Location: {game_name}**"
                 user["last_online"] = user["last_online"] or time.time()
 
@@ -250,6 +273,6 @@ async def on_ready():
     reset_data_on_startup()
     await tree.sync()
     monitor_users.start()
-    print("Bot gestartet – Roblox Web-API für Game-Namen – Dropdown/ID Channel")
+    print("Bot gestartet – Moderne APIs für Game-Namen – Dropdown/ID Channel")
 
 client.run(TOKEN)
