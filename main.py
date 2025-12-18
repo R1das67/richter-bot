@@ -7,19 +7,16 @@ import time
 import os
 
 # ================== CONFIG ==================
-
 TOKEN = os.getenv("DISCORD_TOKEN")
 CHECK_INTERVAL = 30
 DATA_FILE = "bounties.json"
 
 # ================== DISCORD ==================
-
 intents = discord.Intents.default()
 client = discord.Client(intents=intents)
 tree = app_commands.CommandTree(client)
 
 # ================== DATA ==================
-
 def reset_data_on_startup():
     with open(DATA_FILE, "w") as f:
         json.dump({}, f)
@@ -46,7 +43,6 @@ def format_duration(sec: float) -> str:
     return f"{sec//86400}d"
 
 # ================== ROBLOX API ==================
-
 async def get_roblox_user(uid: int):
     async with aiohttp.ClientSession() as session:
         async with session.get(f"https://users.roblox.com/v1/users/{uid}") as r:
@@ -80,22 +76,34 @@ async def get_game_name(place_id: int) -> str:
         return "Unknown Game"
 
 # ================== SLASH COMMANDS ==================
-
 @tree.command(
     name="choose-bounty-channel",
-    description="Setzt den Channel für alle Bounty-Embeds (nur Channel-ID)"
+    description="Setzt den Channel für alle Bounty-Embeds (Channel auswählen oder ID)"
 )
 @app_commands.check(admin_only)
-@app_commands.describe(channel_id="ID des Textchannels")
-async def choose_bounty_channel(interaction: discord.Interaction, channel_id: int):
-
+@app_commands.describe(channel_input="Wähle einen Textchannel oder gib die Channel-ID ein")
+async def choose_bounty_channel(interaction: discord.Interaction, channel_input: str):
     gid = str(interaction.guild.id)
     data = load_data()
 
-    channel = interaction.guild.get_channel(channel_id)
+    channel = None
+
+    # 1️⃣ Prüfen, ob Discord Dropdown (Channel Mention) oder ID
+    if channel_input.isdigit():
+        channel = interaction.guild.get_channel(int(channel_input))
+    elif channel_input.startswith("<#") and channel_input.endswith(">"):
+        cid = int(channel_input[2:-1])
+        channel = interaction.guild.get_channel(cid)
+    else:
+        # Versuch, direkt Channel-Name zu matchen (optional)
+        for c in interaction.guild.text_channels:
+            if c.name == channel_input.strip("#"):
+                channel = c
+                break
+
     if not channel or not isinstance(channel, TextChannel):
         await interaction.response.send_message(
-            "Ungültiger Channel. Bitte nur die ID eines Textchannels eingeben.",
+            "Ungültiger Channel. Bitte eine gültige ID oder den Channel auswählen.",
             ephemeral=True
         )
         return
@@ -113,10 +121,8 @@ async def choose_bounty_channel(interaction: discord.Interaction, channel_id: in
 @app_commands.check(admin_only)
 @app_commands.describe(roblox_id="Roblox User ID")
 async def add_user(interaction: discord.Interaction, roblox_id: int):
-
     data = load_data()
     gid = str(interaction.guild.id)
-
     if gid not in data or "channel_id" not in data[gid]:
         await interaction.response.send_message(
             "Bitte zuerst /choose-bounty-channel ausführen.",
@@ -164,7 +170,6 @@ async def add_user(interaction: discord.Interaction, roblox_id: int):
 @app_commands.check(admin_only)
 @app_commands.describe(user="Roblox ID oder Username")
 async def remove_user(interaction: discord.Interaction, user: str):
-
     data = load_data()
     gid = str(interaction.guild.id)
     users = data.get(gid, {}).get("users", {})
@@ -173,38 +178,27 @@ async def remove_user(interaction: discord.Interaction, user: str):
         if user.lower() in (k, users[k]["username"].lower()):
             del users[k]
             save_data(data)
-            await interaction.response.send_message(
-                "User entfernt.", ephemeral=True
-            )
+            await interaction.response.send_message("User entfernt.", ephemeral=True)
             return
 
-    await interaction.response.send_message(
-        "User nicht gefunden.", ephemeral=True
-    )
+    await interaction.response.send_message("User nicht gefunden.", ephemeral=True)
 
 @tree.command(name="show-bounty-list", description="Zeigt alle gesuchten Spieler")
 @app_commands.check(admin_only)
 async def show_bounty_list(interaction: discord.Interaction):
-
     data = load_data().get(str(interaction.guild.id), {}).get("users", {})
     if not data:
-        await interaction.response.send_message(
-            "Keine Bounties vorhanden.", ephemeral=True
-        )
+        await interaction.response.send_message("Keine Bounties vorhanden.", ephemeral=True)
         return
-
     await interaction.response.send_message(
         "\n".join(f"ID: {v['roblox_id']} | User: {v['username']}" for v in data.values()),
         ephemeral=True
     )
 
 # ================== MONITOR ==================
-
 @tasks.loop(seconds=CHECK_INTERVAL)
 async def monitor_users():
-
     data = load_data()
-
     for guild in client.guilds:
         gid = str(guild.id)
         guild_data = data.get(gid)
@@ -216,15 +210,11 @@ async def monitor_users():
             continue
 
         for user in guild_data.get("users", {}).values():
-
             presence = await get_presence(user["roblox_id"])
             if not presence:
                 continue
 
-            embed = discord.Embed(
-                title=f"{user['display_name']} ({user['username']})"
-            )
-
+            embed = discord.Embed(title=f"{user['display_name']} ({user['username']})")
             status = presence["userPresenceType"]
 
             if status == 0:
@@ -235,12 +225,10 @@ async def monitor_users():
                         f"**Played for: {format_duration(time.time() - user['last_online'])}**"
                     )
                     user["last_online"] = None
-
             elif status == 1:
                 embed.color = discord.Color.from_rgb(120, 180, 255)
                 embed.description = "**Is now online!**\n**Location: Robloxmenu**"
                 user["last_online"] = user["last_online"] or time.time()
-
             elif status == 2:
                 embed.color = discord.Color.green()
                 game = await get_game_name(presence.get("placeId"))
@@ -256,12 +244,11 @@ async def monitor_users():
     save_data(data)
 
 # ================== START ==================
-
 @client.event
 async def on_ready():
     reset_data_on_startup()
     await tree.sync()
     monitor_users.start()
-    print("Bot gestartet – echte Roblox API – aiohttp Version – nur Channel-ID")
+    print("Bot gestartet – echte Roblox API – aiohttp Version – Dropdown/ID Channel")
 
 client.run(TOKEN)
