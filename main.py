@@ -1,278 +1,239 @@
 import discord
-from discord import app_commands, TextChannel
-from discord.ext import tasks
-import aiohttp
+from discord import app_commands
+from discord.ext import commands
 import json
-import time
 import os
+import time
 
-# ================== CONFIG ==================
-TOKEN = os.getenv("DISCORD_TOKEN")
-CHECK_INTERVAL = 30
-DATA_FILE = "bounties.json"
+CONFIG_FILE = "config.json"
+COOLDOWN_SECONDS = 60
 
-# ================== DISCORD ==================
-intents = discord.Intents.default()
-client = discord.Client(intents=intents)
-tree = app_commands.CommandTree(client)
-
-# ================== DATA ==================
-def reset_data_on_startup():
-    with open(DATA_FILE, "w") as f:
-        json.dump({}, f)
-
-def load_data():
-    with open(DATA_FILE, "r") as f:
+# -------------------------------------------------
+# CONFIG HANDLING
+# -------------------------------------------------
+def load_config():
+    with open(CONFIG_FILE, "r") as f:
         return json.load(f)
 
-def save_data(data):
-    with open(DATA_FILE, "w") as f:
+def save_config(data):
+    with open(CONFIG_FILE, "w") as f:
         json.dump(data, f, indent=4)
 
-def admin_only(interaction: discord.Interaction):
-    return interaction.user.guild_permissions.administrator
+# -------------------------------------------------
+# BOT SETUP
+# -------------------------------------------------
+intents = discord.Intents.default()
+bot = commands.Bot(command_prefix="!", intents=intents)
 
-def format_duration(sec: float) -> str:
-    sec = int(sec)
-    if sec < 60:
-        return f"{sec}s"
-    if sec < 3600:
-        return f"{sec//60}m"
-    if sec < 86400:
-        return f"{sec//3600}h"
-    return f"{sec//86400}d"
+# Cooldown storage
+user_cooldowns = {}
 
-# ================== ROBLOX API ==================
-async def get_roblox_user(uid: int):
-    async with aiohttp.ClientSession() as session:
-        async with session.get(f"https://users.roblox.com/v1/users/{uid}") as r:
-            if r.status != 200:
-                return None
-            return await r.json()
-
-async def get_presence(uid: int):
-    async with aiohttp.ClientSession() as session:
-        async with session.post(
-            "https://presence.roblox.com/v1/presence/users",
-            json={"userIds": [uid]}
-        ) as r:
-            if r.status != 200:
-                return None
-            data = await r.json()
-            return data["userPresences"][0]
-
-# ================== GAME NAME – MODERN API ==================
-async def get_game_name_modern(place_id: int) -> str:
-    """
-    Liefert den Spielnamen mit allen modernen Roblox-APIs.
-    Versucht zuerst Universe -> Games, dann direkt Place -> Games.
-    """
-    if not place_id:
-        return "Unknown Game"
-
-    try:
-        async with aiohttp.ClientSession() as session:
-            # 1️⃣ Place → Universe
-            async with session.get(f"https://apis.roblox.com/universes/v1/places/{place_id}/universe") as r1:
-                if r1.status == 200:
-                    data1 = await r1.json()
-                    universe_id = data1.get("universeId")
-                else:
-                    universe_id = None
-
-            # 2️⃣ Universe → Game Name
-            if universe_id:
-                async with session.get(f"https://games.roblox.com/v1/games?universeIds={universe_id}") as r2:
-                    if r2.status == 200:
-                        data2 = await r2.json()
-                        game_data = data2.get("data")
-                        if game_data and len(game_data) > 0:
-                            return game_data[0].get("name", "Unknown Game")
-
-            # 3️⃣ Fallback: Place direkt prüfen
-            async with session.get(f"https://games.roblox.com/v1/games?placeIds={place_id}") as r3:
-                if r3.status == 200:
-                    data3 = await r3.json()
-                    game_data3 = data3.get("data")
-                    if game_data3 and len(game_data3) > 0:
-                        return game_data3[0].get("name", "Unknown Game")
-
-            return "Unknown Game"
-
-    except Exception as e:
-        print(f"Fehler beim Abrufen des Game-Namens (modern APIs): {e}")
-        return "Unknown Game"
-
-# ================== SLASH COMMANDS ==================
-@tree.command(
-    name="choose-bounty-channel",
-    description="Setzt den Channel für alle Bounty-Embeds (Dropdown oder ID)"
-)
-@app_commands.check(admin_only)
-@app_commands.describe(channel_input="Wähle einen Textchannel oder gib die Channel-ID ein")
-async def choose_bounty_channel(interaction: discord.Interaction, channel_input: str):
-    gid = str(interaction.guild.id)
-    data = load_data()
-
-    channel = None
-    if channel_input.isdigit():
-        channel = interaction.guild.get_channel(int(channel_input))
-    elif channel_input.startswith("<#") and channel_input.endswith(">"):
-        cid = int(channel_input[2:-1])
-        channel = interaction.guild.get_channel(cid)
-    else:
-        for c in interaction.guild.text_channels:
-            if c.name == channel_input.strip("#"):
-                channel = c
-                break
-
-    if not channel or not isinstance(channel, TextChannel):
-        await interaction.response.send_message(
-            "Ungültiger Channel. Bitte eine gültige ID oder Channel auswählen.",
-            ephemeral=True
-        )
-        return
-
-    data.setdefault(gid, {})
-    data[gid]["channel_id"] = channel.id
-    data[gid].setdefault("users", {})
-    save_data(data)
-
-    await interaction.response.send_message(
-        f"Bounty-Channel gesetzt: {channel.mention}", ephemeral=True
+# -------------------------------------------------
+# PERMISSION CHECK
+# -------------------------------------------------
+def admin_only(interaction: discord.Interaction) -> bool:
+    return (
+        interaction.user.guild_permissions.administrator
+        or interaction.user.guild_permissions.manage_guild
     )
 
-@tree.command(name="add-user", description="Fügt einen Roblox User zur Bounty-Liste hinzu")
-@app_commands.check(admin_only)
-@app_commands.describe(roblox_id="Roblox User ID")
-async def add_user(interaction: discord.Interaction, roblox_id: int):
-    data = load_data()
-    gid = str(interaction.guild.id)
-    if gid not in data or "channel_id" not in data[gid]:
+# -------------------------------------------------
+# MODAL
+# -------------------------------------------------
+class PanicModal(discord.ui.Modal, title="🚨 Panic Alarm"):
+    roblox_user = discord.ui.TextInput(
+        label="Your Roblox Username",
+        placeholder="Enter your Roblox username",
+        required=True,
+        max_length=100
+    )
+
+    location = discord.ui.TextInput(
+        label="Your Location",
+        placeholder="Where are you currently?",
+        required=True,
+        max_length=100
+    )
+
+    extra_info = discord.ui.TextInput(
+        label="Additional Information (Optional)",
+        style=discord.TextStyle.paragraph,
+        required=False,
+        max_length=500
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        now = time.time()
+        last_used = user_cooldowns.get(interaction.user.id, 0)
+
+        if now - last_used < COOLDOWN_SECONDS:
+            remaining = int(COOLDOWN_SECONDS - (now - last_used))
+            await interaction.response.send_message(
+                f"You must wait **{remaining}s** before creating another panic alarm.",
+                ephemeral=True
+            )
+            return
+
+        user_cooldowns[interaction.user.id] = now
+
+        config = load_config()
+        channel_id = config.get("panic_channel_id")
+        role_id = config.get("panic_role_id")
+
+        if not channel_id or not role_id:
+            await interaction.response.send_message(
+                "Panic system is not fully configured.",
+                ephemeral=True
+            )
+            return
+
+        channel = interaction.guild.get_channel(channel_id)
+        role = interaction.guild.get_role(role_id)
+
+        if not channel or not role:
+            await interaction.response.send_message(
+                "Configured channel or role no longer exists.",
+                ephemeral=True
+            )
+            return
+
+        embed = discord.Embed(
+            title="🚨 Panic Alarm! 🚨",
+            color=discord.Color.red()
+        )
+        embed.add_field(
+            name="User",
+            value=f"{interaction.user.mention} has created a panic alarm.",
+            inline=False
+        )
+        embed.add_field(
+            name="Roblox Username",
+            value=self.roblox_user.value,
+            inline=False
+        )
+        embed.add_field(
+            name="Location",
+            value=self.location.value,
+            inline=False
+        )
+        embed.add_field(
+            name="Additional Information",
+            value=self.extra_info.value if self.extra_info.value else "No additional information provided.",
+            inline=False
+        )
+
+        await channel.send(content=role.mention)
+        await channel.send(embed=embed)
+
         await interaction.response.send_message(
-            "Bitte zuerst /choose-bounty-channel ausführen.",
+            "Your panic alarm has been sent successfully. Help is on the way.",
+            ephemeral=True
+        )
+
+# -------------------------------------------------
+# BUTTON VIEW
+# -------------------------------------------------
+class PanicView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(
+        label="🚨 Create Panic Alarm",
+        style=discord.ButtonStyle.danger
+    )
+    async def panic_button(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button
+    ):
+        await interaction.response.send_modal(PanicModal())
+
+# -------------------------------------------------
+# SLASH COMMANDS (ADMIN ONLY)
+# -------------------------------------------------
+@bot.tree.command(name="pick-panic-channel", description="Set the channel for panic alarms")
+@app_commands.describe(channel="Channel where panic alarms will be sent")
+async def pick_panic_channel(
+    interaction: discord.Interaction,
+    channel: discord.TextChannel
+):
+    if not admin_only(interaction):
+        await interaction.response.send_message(
+            "You do not have permission to use this command.",
             ephemeral=True
         )
         return
 
-    users = data[gid].setdefault("users", {})
-    if str(roblox_id) in users:
+    config = load_config()
+    config["panic_channel_id"] = channel.id
+    save_config(config)
+
+    await interaction.response.send_message(
+        f"Panic channel set to {channel.mention}",
+        ephemeral=True
+    )
+
+@bot.tree.command(name="pick-panic-role", description="Set the role to ping during panic alarms")
+@app_commands.describe(role="Role to be mentioned for panic alarms")
+async def pick_panic_role(
+    interaction: discord.Interaction,
+    role: discord.Role
+):
+    if not admin_only(interaction):
         await interaction.response.send_message(
-            "User ist bereits in der Liste.", ephemeral=True
+            "You do not have permission to use this command.",
+            ephemeral=True
         )
         return
 
-    user = await get_roblox_user(roblox_id)
-    if not user:
+    config = load_config()
+    config["panic_role_id"] = role.id
+    save_config(config)
+
+    await interaction.response.send_message(
+        f"Panic role set to {role.mention}",
+        ephemeral=True
+    )
+
+@bot.tree.command(name="create-panic-button", description="Create the panic button embed")
+async def create_panic_button(interaction: discord.Interaction):
+    if not admin_only(interaction):
         await interaction.response.send_message(
-            "Roblox User nicht gefunden.", ephemeral=True
+            "You do not have permission to use this command.",
+            ephemeral=True
         )
         return
 
     embed = discord.Embed(
-        title=f"{user['displayName']} ({user['name']})",
-        description="Initialisiert...",
+        title="🚨 Panic Button 🚨",
+        description=(
+            "**Are you on an EH server and require immediate assistance?**\n\n"
+            "Press the button below to create a panic alarm. "
+            "Our team will be notified instantly and respond as fast as possible."
+        ),
         color=discord.Color.red()
     )
 
-    channel = interaction.guild.get_channel(data[gid]["channel_id"])
-    message = await channel.send(embed=embed)
+    await interaction.channel.send(
+        embed=embed,
+        view=PanicView()
+    )
 
-    users[str(roblox_id)] = {
-        "roblox_id": roblox_id,
-        "username": user["name"],
-        "display_name": user["displayName"],
-        "message_id": message.id,
-        "last_online": None
-    }
-
-    save_data(data)
-    await interaction.response.send_message("User hinzugefügt.", ephemeral=True)
-
-@tree.command(name="remove-user", description="Entfernt einen User aus der Bounty-Liste")
-@app_commands.check(admin_only)
-@app_commands.describe(user="Roblox ID oder Username")
-async def remove_user(interaction: discord.Interaction, user: str):
-    data = load_data()
-    gid = str(interaction.guild.id)
-    users = data.get(gid, {}).get("users", {})
-
-    for k in list(users.keys()):
-        if user.lower() in (k, users[k]["username"].lower()):
-            del users[k]
-            save_data(data)
-            await interaction.response.send_message("User entfernt.", ephemeral=True)
-            return
-
-    await interaction.response.send_message("User nicht gefunden.", ephemeral=True)
-
-@tree.command(name="show-bounty-list", description="Zeigt alle gesuchten Spieler")
-@app_commands.check(admin_only)
-async def show_bounty_list(interaction: discord.Interaction):
-    data = load_data().get(str(interaction.guild.id), {}).get("users", {})
-    if not data:
-        await interaction.response.send_message("Keine Bounties vorhanden.", ephemeral=True)
-        return
     await interaction.response.send_message(
-        "\n".join(f"ID: {v['roblox_id']} | User: {v['username']}" for v in data.values()),
+        "Panic button successfully created.",
         ephemeral=True
     )
 
-# ================== MONITOR ==================
-@tasks.loop(seconds=CHECK_INTERVAL)
-async def monitor_users():
-    data = load_data()
-    for guild in client.guilds:
-        gid = str(guild.id)
-        guild_data = data.get(gid)
-        if not guild_data:
-            continue
-
-        channel = guild.get_channel(guild_data.get("channel_id"))
-        if not channel:
-            continue
-
-        for user in guild_data.get("users", {}).values():
-            presence = await get_presence(user["roblox_id"])
-            if not presence:
-                continue
-
-            embed = discord.Embed(title=f"{user['display_name']} ({user['username']})")
-            status = presence["userPresenceType"]
-
-            if status == 0:
-                embed.color = discord.Color.red()
-                embed.description = "**Is offline!**"
-                if user["last_online"]:
-                    embed.description += f"\n**Played for: {format_duration(time.time() - user['last_online'])}**"
-                    user["last_online"] = None
-
-            elif status == 1:
-                embed.color = discord.Color.from_rgb(120, 180, 255)
-                embed.description = "**Is now online!**\n**Location: Robloxmenu**"
-                user["last_online"] = user["last_online"] or time.time()
-
-            elif status == 2:
-                embed.color = discord.Color.green()
-                place_id = presence.get("placeId")
-                game_name = await get_game_name_modern(place_id)
-                embed.description = f"**Is now playing!**\n**Location: {game_name}**"
-                user["last_online"] = user["last_online"] or time.time()
-
-            try:
-                msg = await channel.fetch_message(user["message_id"])
-                await msg.edit(embed=embed)
-            except:
-                pass
-
-    save_data(data)
-
-# ================== START ==================
-@client.event
+# -------------------------------------------------
+# EVENTS
+# -------------------------------------------------
+@bot.event
 async def on_ready():
-    reset_data_on_startup()
-    await tree.sync()
-    monitor_users.start()
-    print("Bot gestartet – Moderne APIs für Game-Namen – Dropdown/ID Channel")
+    await bot.tree.sync()
+    bot.add_view(PanicView())
+    print(f"Bot logged in as {bot.user}")
 
-client.run(TOKEN)
+# -------------------------------------------------
+# START
+# -------------------------------------------------
+bot.run(os.getenv("DISCORD_TOKEN"))
