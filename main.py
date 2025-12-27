@@ -47,6 +47,7 @@ def save_application_bans(data):
 # -------------------------------------------------
 intents = discord.Intents.default()
 intents.members = True
+intents.guilds = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 user_cooldowns = {}
@@ -269,3 +270,4 @@ async def on_ready():
 # START
 # -------------------------------------------------
 bot.run(os.getenv("DISCORD_TOKEN"))
+
