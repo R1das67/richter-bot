@@ -9,6 +9,8 @@ CONFIG_FILE = "config.json"
 APPLICATION_BAN_FILE = "application_bans.json"
 COOLDOWN_SECONDS = 60
 
+OWNER_ID = 843180408152784936
+
 # -------------------------------------------------
 # CONFIG HANDLING
 # -------------------------------------------------
@@ -53,11 +55,14 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 user_cooldowns = {}
 
 # -------------------------------------------------
-# PERMISSION CHECK
+# PERMISSION CHECKS
 # -------------------------------------------------
 def admin_only(interaction: discord.Interaction) -> bool:
     perms = interaction.user.guild_permissions
     return perms.administrator or perms.manage_roles
+
+def owner_only(interaction: discord.Interaction) -> bool:
+    return interaction.user.id == OWNER_ID
 
 # -------------------------------------------------
 # PANIC MODAL
@@ -129,14 +134,11 @@ class PanicView(discord.ui.View):
         await interaction.response.send_modal(PanicModal())
 
 # -------------------------------------------------
-# PANIC COMMANDS
+# PANIC COMMANDS (OWNER ONLY)
 # -------------------------------------------------
 @bot.tree.command(name="pick-panic-channel")
+@app_commands.check(owner_only)
 async def pick_panic_channel(interaction: discord.Interaction, channel: discord.TextChannel):
-    if not admin_only(interaction):
-        await interaction.response.send_message("No permission.", ephemeral=True)
-        return
-
     config = load_config()
     config["panic_channel_id"] = channel.id
     save_config(config)
@@ -147,11 +149,8 @@ async def pick_panic_channel(interaction: discord.Interaction, channel: discord.
     )
 
 @bot.tree.command(name="pick-panic-role")
+@app_commands.check(owner_only)
 async def pick_panic_role(interaction: discord.Interaction, role: discord.Role):
-    if not admin_only(interaction):
-        await interaction.response.send_message("No permission.", ephemeral=True)
-        return
-
     config = load_config()
     config["panic_role_id"] = role.id
     save_config(config)
@@ -162,11 +161,8 @@ async def pick_panic_role(interaction: discord.Interaction, role: discord.Role):
     )
 
 @bot.tree.command(name="create-panic-button")
+@app_commands.check(owner_only)
 async def create_panic_button(interaction: discord.Interaction):
-    if not admin_only(interaction):
-        await interaction.response.send_message("No permission.", ephemeral=True)
-        return
-
     embed = discord.Embed(
         title="🚨 Panic Button 🚨",
         description="Press the button below to alert our team instantly.",
@@ -177,7 +173,40 @@ async def create_panic_button(interaction: discord.Interaction):
     await interaction.response.send_message("Panic button created.", ephemeral=True)
 
 # -------------------------------------------------
-# APPLICATION BAN COMMANDS
+# EMBED COMMAND (ADMIN ONLY)
+# -------------------------------------------------
+@bot.tree.command(name="send-embed", description="Send an embed message to a channel")
+@app_commands.check(admin_only)
+async def send_embed(
+    interaction: discord.Interaction,
+    channel: discord.TextChannel,
+    title: str,
+    description: str,
+    color: str = "red",
+    thumbnail_url: str | None = None
+):
+    try:
+        embed_color = int(color.replace("#", ""), 16)
+    except ValueError:
+        embed_color = discord.Color.red().value
+
+    embed = discord.Embed(
+        title=title,
+        description=description,
+        color=embed_color
+    )
+
+    if thumbnail_url:
+        embed.set_thumbnail(url=thumbnail_url)
+
+    await channel.send(embed=embed)
+    await interaction.response.send_message(
+        f"Embed sent to {channel.mention}",
+        ephemeral=True
+    )
+
+# -------------------------------------------------
+# APPLICATION BAN COMMANDS (ADMIN)
 # -------------------------------------------------
 @bot.tree.command(name="add-application-ban")
 async def add_application_ban(
@@ -270,4 +299,3 @@ async def on_ready():
 # START
 # -------------------------------------------------
 bot.run(os.getenv("DISCORD_TOKEN"))
-
