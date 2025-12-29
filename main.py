@@ -176,14 +176,16 @@ async def create_panic_button(interaction: discord.Interaction):
 # EMBED COMMAND (ADMIN ONLY)
 # -------------------------------------------------
 @bot.tree.command(name="send-embed", description="Send an embed message to a channel")
-@app_commands.check(admin_only)
+@app_commands.default_permissions(administrator=True)
 async def send_embed(
     interaction: discord.Interaction,
     channel: discord.TextChannel,
     title: str,
     description: str,
     color: str = "red",
-    thumbnail_url: str | None = None
+    thumbnail_url: str | None = None,
+    image_url_top: str | None = None,
+    image_url_bottom: str | None = None
 ):
     try:
         embed_color = int(color.replace("#", ""), 16)
@@ -198,6 +200,10 @@ async def send_embed(
 
     if thumbnail_url:
         embed.set_thumbnail(url=thumbnail_url)
+    if image_url_top:
+        embed.set_image(url=image_url_top)
+    if image_url_bottom:
+        embed.set_footer(text="", icon_url=image_url_bottom)
 
     await channel.send(embed=embed)
     await interaction.response.send_message(
@@ -293,7 +299,7 @@ async def on_ready():
     load_config()
     bot.add_view(PanicView())
     await bot.tree.sync()
-    print(f"Logged in as {bot.user}")
+    print(f"Logged in als {bot.user}")
 
 # -------------------------------------------------
 # START
