@@ -202,11 +202,15 @@ async def send_embed(
         embed.set_image(url=image_url_top)  # Bild oben über Titel
     if thumbnail_url:
         embed.set_thumbnail(url=thumbnail_url)
-    if image_url_bottom:
-        # Setzt Footer-Icon, Footer-Text leer, also unten unter dem Text
-        embed.set_footer(text="", icon_url=image_url_bottom)
 
     await channel.send(embed=embed)
+
+    # Wenn unten Bild gesetzt ist, zweiten Embed direkt darunter senden
+    if image_url_bottom:
+        embed_bottom = discord.Embed(color=embed_color)
+        embed_bottom.set_image(url=image_url_bottom)
+        await channel.send(embed=embed_bottom)
+
     await interaction.response.send_message(
         f"Embed sent to {channel.mention}",
         ephemeral=True
