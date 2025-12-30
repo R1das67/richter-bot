@@ -184,8 +184,7 @@ async def send_embed(
     description: str,
     color: str = "red",
     thumbnail_url: str | None = None,
-    image_url_top: str | None = None,
-    image_url_bottom: str | None = None
+    image_url: str | None = None
 ):
     try:
         embed_color = int(color.replace("#", ""), 16)
@@ -198,19 +197,12 @@ async def send_embed(
         color=embed_color
     )
 
-    if image_url_top:
-        embed.set_image(url=image_url_top)  # Bild oben über Titel
     if thumbnail_url:
         embed.set_thumbnail(url=thumbnail_url)
+    if image_url:
+        embed.set_image(url=image_url)  # Direkt unter Beschreibung
 
     await channel.send(embed=embed)
-
-    # Wenn unten Bild gesetzt ist, zweiten Embed direkt darunter senden
-    if image_url_bottom:
-        embed_bottom = discord.Embed(color=embed_color)
-        embed_bottom.set_image(url=image_url_bottom)
-        await channel.send(embed=embed_bottom)
-
     await interaction.response.send_message(
         f"Embed sent to {channel.mention}",
         ephemeral=True
